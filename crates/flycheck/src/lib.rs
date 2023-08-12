@@ -98,8 +98,8 @@ impl FlycheckHandle {
     }
 
     /// Schedule a re-start of the cargo check worker.
-    pub fn restart(&self) {
-        self.sender.send(StateChange::Restart).unwrap();
+    pub fn restart(&self, modified_file: Option<AbsPathBuf>) {
+        self.sender.send(StateChange::Restart { modified_file }).unwrap();
     }
 
     /// Stop this cargo check worker.
@@ -150,7 +150,7 @@ pub enum Progress {
 }
 
 enum StateChange {
-    Restart,
+    Restart { modified_file: Option<AbsPathBuf> },
     Cancel,
 }
 
@@ -210,7 +210,7 @@ impl FlycheckActor {
                     tracing::debug!(flycheck_id = self.id, "flycheck cancelled");
                     self.cancel_check_process();
                 }
-                Event::RequestStateChange(StateChange::Restart) => {
+                Event::RequestStateChange(StateChange::Restart { modified_file }) => {
                     // Cancel the previously spawned process
                     self.cancel_check_process();
                     while let Ok(restart) = inbox.recv_timeout(Duration::from_millis(50)) {
@@ -220,7 +220,14 @@ impl FlycheckActor {
                         }
                     }
 
-                    let command = self.check_command();
+                    let mut command = self.check_command();
+
+                    if let Some(modified_file) = modified_file {
+                        if let Some(rel) = modified_file.strip_prefix(&self.root) {
+                            command.env("RUST_ANALYZER_MODIFIED_FILE", rel.as_ref().as_os_str());
+                        }
+                    }
+
                     tracing::debug!(?command, "will restart flycheck");
                     match CargoHandle::spawn(command) {
                         Ok(cargo_handle) => {
